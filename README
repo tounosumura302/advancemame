@@ -1,3 +1,18 @@
+AdvanceMAME with rapid fire function.
+
+AdvanceMAMEにシンクロ連射機能を追加しました。
+メニューに追加された "Rapid Fire" より、ボタンごとに連射有無と間隔を設定できます。
+さらに、ボタンの追加が可能となっています。
+ショットボタンに連射なし、ありの2つを用意できるので、連射ありだけではうまくプレイできないゲームにも対応できます。
+
+
+This version of AdvanceMAME has been added with a rapid fire function.
+You can select "Rapid Fire" from config menu to enable rapid fire and select the rapid interval for each button.
+In addition, buttons can be added.
+For example, you can add an extra shot button with rapid fire function to play with normal (no rapid fire) button and rapid fire button.
+
+
+
 AdvanceMAME/MESS emulators and AdvanceMENU frontend
 ===================================================
 
