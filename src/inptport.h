@@ -19,8 +19,6 @@
 #include "unicode.h"
 #endif
 
-
-
 /*************************************
  *
  *  Constants
@@ -720,5 +718,16 @@ void input_port_set_digital_value(int port, UINT32 value, UINT32 mask);
 UINT32 readinputport(int port);
 UINT32 readinputportbytag(const char *tag);
 UINT32 readinputportbytag_safe(const char *tag, UINT32 defvalue);
+
+/*@@@@@@@@@@@@@@@@
+  @@ rapid fire @@
+  @@@@@@@@@@@@@@@@*/
+#define ENABLE_RAPIDFIRE
+#ifdef ENABLE_RAPIDFIRE
+int rapidfire_getInterval(int player,int button);
+void rapidfire_setInterval(int player,int button,int interval);
+int rapidfire_getRedirect(int player,int button);
+void rapidfire_setRedirect(int player,int button,int redirect);
+#endif /* ENABLE_RAPIDFIRE */
 
 #endif	/* __INPTPORT_H__ */

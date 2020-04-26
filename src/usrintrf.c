@@ -358,6 +358,16 @@ static UINT32 menu_file_manager(UINT32 state);
 static UINT32 menu_tape_control(UINT32 state);
 #endif
 
+/*@@@@@@@@@@@@@@@@
+  @@ rapid fire @@
+  @@@@@@@@@@@@@@@@*/
+#define ENABLE_RAPIDFIRE
+#ifdef ENABLE_RAPIDFIRE
+static UINT32 menu_rapidfire_players(UINT32 state);
+static UINT32 menu_rapidfire_buttons(UINT32 state);
+static UINT32 menu_rapidfire_per_button(UINT32 state);
+#endif
+
 static int sprintf_game_info(char *buf);
 
 
@@ -1464,6 +1474,16 @@ do { \
 
 	/* add game-specific input item */
 	ADD_MENU(UI_inputspecific, menu_game_input, 0);
+
+	/*@@@@@@@@@@@@@@@@
+	  @@ rapid fire @@
+	  @@@@@@@@@@@@@@@@*/
+#ifdef ENABLE_RAPIDFIRE
+	item_list[menu_items].text = "Rapid Fire";
+	handler_list[menu_items] = menu_rapidfire_players;
+	param_list[menu_items] = 0;
+	menu_items++;
+#endif
 
 	/* add DIP switches menu */
 	if (has_dips)
@@ -4202,3 +4222,173 @@ static void render_ui(mame_bitmap *dest)
 	elemindex = 0;
 #endif
 }
+
+
+/* ******************************************************************************
+   rapid fire function for Advanve Mame
+   by tounosumura302
+   2020/01/29
+ ****************************************************************************** */
+#ifdef ENABLE_RAPIDFIRE
+
+#define RAPIDFIRE_MAX_PLAYERS  MAX_PLAYERS
+#define RAPIDFIRE_MAX_BUTTONS  10
+
+static char *rapidfire_menuitem_players[]={
+				    "Player 1",
+				    "Player 2",
+				    "Player 3",
+				    "Player 4",
+				    "Player 5",
+				    "Player 6",
+				    "Player 7",
+				    "Player 8"};
+
+static UINT32 menu_rapidfire_players(UINT32 state)
+{
+	ui_menu_item item_list[RAPIDFIRE_MAX_PLAYERS+1];
+	int menu_items = 0;
+
+	/* reset the menu */
+	memset(item_list, 0, sizeof(item_list));
+
+	/* build up the menu */
+	for (menu_items = 0; menu_items < RAPIDFIRE_MAX_PLAYERS; menu_items++)
+		item_list[menu_items].text = rapidfire_menuitem_players[menu_items];
+
+	/* add an item for the return */
+	item_list[menu_items++].text = ui_getstring(UI_returntomain);
+
+	/* draw the menu */
+	ui_draw_menu(item_list, menu_items, state);
+
+	/* handle the keys */
+	if (ui_menu_generic_keys((int *) &state, menu_items))
+		return state;
+	if (input_ui_pressed(IPT_UI_SELECT))
+		return ui_menu_stack_push(menu_rapidfire_buttons, state << 16);
+	return state;
+}
+
+static char *rapidfire_menuitem_buttons[]={
+				    "Button 1",
+				    "Button 2",
+				    "Button 3",
+				    "Button 4",
+				    "Button 5",
+				    "Button 6",
+				    "Button 7",
+				    "Button 8",
+				    "Button 9",
+				    "Button 10"};
+
+static UINT32 menu_rapidfire_buttons(UINT32 state)
+{
+	ui_menu_item item_list[RAPIDFIRE_MAX_BUTTONS+1];
+	int menu_items = 0;
+	int selected = state & 0xffff;
+	int player = state >> 16;
+
+	/* reset the menu */
+	memset(item_list, 0, sizeof(item_list));
+
+	/* build up the menu */
+	for (menu_items = 0; menu_items < RAPIDFIRE_MAX_BUTTONS; menu_items++)
+		item_list[menu_items].text = rapidfire_menuitem_buttons[menu_items];
+
+	/* add an item for the return */
+	item_list[menu_items++].text = ui_getstring(UI_returntoprior);
+
+	/* draw the menu */
+	ui_draw_menu(item_list, menu_items, selected);
+
+	/* handle the keys */
+	if (ui_menu_generic_keys((int *) &selected, menu_items))
+		return selected;
+	if (input_ui_pressed(IPT_UI_SELECT))
+	  return ui_menu_stack_push(menu_rapidfire_per_button, (player<<24)|(selected<<16));
+
+	return selected | (player << 16);
+}
+
+
+
+
+static UINT32 menu_rapidfire_per_button(UINT32 state)
+{
+	ui_menu_item item_list[3];
+	int menu_items = 0;
+	int selected = state & 0xffff;
+	int player = state >> 24;
+	int button = (state >> 16)&0xff;
+	int interval=rapidfire_getInterval(player,button);
+	int redirect=rapidfire_getRedirect(player,button);
+	char item0_text[1024],item1_text[1024];
+
+	/* reset the menu */
+	memset(item_list, 0, sizeof(item_list));
+
+	/* build up the menu */
+	if (interval==0){
+	  snprintf(item0_text,sizeof(item0_text),"Interval none(no rapid fire)");
+	}
+	else{
+	  snprintf(item0_text,sizeof(item0_text),"Interval %02d",interval);
+	}
+	item_list[menu_items++].text=item0_text;
+
+	if (redirect<0){
+	  snprintf(item1_text,sizeof(item1_text),"Redirect   none");
+	}
+	else{
+	  snprintf(item1_text,sizeof(item1_text),"Redirect to  %s",rapidfire_menuitem_buttons[redirect]);
+	}
+	item_list[menu_items++].text=item1_text;
+
+	/* add an item for the return */
+	item_list[menu_items++].text = ui_getstring(UI_returntoprior);
+
+	/* draw the menu */
+	ui_draw_menu(item_list, menu_items, selected);
+
+	/* handle the keys */
+	if (ui_menu_generic_keys((int *) &selected, menu_items))
+		return selected;
+	if (input_ui_pressed(IPT_UI_LEFT)){
+	  switch(selected){
+	  case 0:
+	    if (--interval<=1) interval=0;
+	    rapidfire_setInterval(player,button,interval);
+	    break;
+	  case 1:
+	    do{
+	      if (--redirect<-1) redirect=-1;
+	    } while(redirect==button);
+	    rapidfire_setRedirect(player,button,redirect);
+	    break;
+	  }
+	}
+	else if (input_ui_pressed(IPT_UI_RIGHT)){
+	  switch(selected){
+	  case 0:
+	    ++interval;
+	    if (interval==1) interval=2;
+	    else if (interval>60) interval=60;
+	    rapidfire_setInterval(player,button,interval);
+	    break;
+	  case 1:
+	    if (redirect+1!=button){
+	      if (redirect<10-1)  redirect++;
+	    }
+	    else{
+	      /* skip same button */
+	      if (redirect<10-2)  redirect+=2;
+	    }
+	    rapidfire_setRedirect(player,button,redirect);
+	    break;
+	  }	    
+	}
+	return selected | (player << 24) | (button<<16);
+}
+
+#endif /* ENABLE_RAPIDFIRE */

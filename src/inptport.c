@@ -981,7 +981,14 @@ static void update_digital_joysticks(void);
 static void update_analog_port(int port);
 static void interpolate_analog_port(int port);
 
-
+/*@@@@@@@@@@@@@@@@
+  @@ rapid fire @@
+  @@@@@@@@@@@@@@@@*/
+#define ENABLE_RAPIDFIRE
+#ifdef ENABLE_RAPIDFIRE
+void rapidfire_init(void);
+int rapidfire_buttonPressed(int pressed,input_port_entry *port);
+#endif
 
 /*************************************
  *
@@ -1093,7 +1100,7 @@ static void input_port_postload(void)
 			port_info[portnum].bit[bitnum].port = port;
 			port_info[portnum].bit[bitnum].impulse = 0;
 			port_info[portnum].bit[bitnum++].last = 0;
-
+			
 			/* if this is a custom input, add it to the list */
 			if (port->custom != NULL)
 			{
@@ -1223,6 +1230,13 @@ static void input_port_postload(void)
 		}
 	}
 
+	/*@@@@@@@@@@@@@@@@
+	  @@ rapid fire @@
+	  @@@@@@@@@@@@@@@@*/
+#ifdef ENABLE_RAPIDFIRE
+	rapidfire_init();
+#endif
+	
 	/* run an initial update */
 	input_port_vblank_start();
 }
@@ -2233,6 +2247,17 @@ profiler_mark(PROFILER_INPUT);
 					/* if the sequence for this port is currently pressed.... */
 					int pressed = seq_pressed(input_port_seq(port, SEQ_TYPE_STANDARD));
 
+					/*@@@@@@@@@@@@@@@@
+					  @@ rapid fire @@
+					  @@@@@@@@@@@@@@@@*/
+#ifdef ENABLE_RAPIDFIRE
+					if (pressed){
+					  pressed=rapidfire_buttonPressed(pressed,port);
+					}
+#endif
+					
+
+
 					/* AdvanceMAME: Filter all the input ports */
 					pressed = osd_input_port_filter(pressed, port->type, port->player, SEQ_TYPE_STANDARD);
 
@@ -2290,11 +2315,13 @@ profiler_mark(PROFILER_INPUT);
 						info->last = 1;
 						portinfo->digital ^= port->mask;
 					}
+
 				}
 
 				/* note that analog ports are handled instantaneously at port read time */
 			}
 	}
+
 
 #ifdef MESS
 	/* less MESS to MESSy things */
@@ -2795,3 +2822,266 @@ void input_port_set_changed_callback(int port, UINT32 mask, void (*callback)(voi
 
 	portinfo->change_notify = cbinfo;
 }
+
+
+/* ******************************************************************************
+   rapid fire function for Advanve Mame
+   by tounosumura302
+   2020/01/29
+ ****************************************************************************** */
+#ifdef ENABLE_RAPIDFIRE
+
+#define RAPIDFIRE_MAX_PLAYERS  MAX_PLAYERS
+#define RAPIDFIRE_MAX_BUTTONS  10
+
+/* rapid fire button parameters */
+typedef struct{
+  int interval;                     /* rapid fire interval */
+  int intervalcounter;              /* rapid fire counter  */
+  input_port_entry *inputportentry; /* input port entry */
+  int portnum;                      /* number of input port */
+
+  int buttontype;                   /* button type (RAPIDFIRE_TYPE_*  */
+  int redirectbutton;               /* redirect button type (IPT_BUTTONn) */
+  UINT32 originalmask;              /* */
+}
+  RapidfireButtonParm;
+
+/* buttontype */
+enum{
+     RAPIDFIRE_TYPE_NONE=0,  /* no rapid fire */
+     RAPIDFIRE_TYPE_REAL,    /* real button */
+     RAPIDFIRE_TYPE_VIRTUAL  /* virtual button */
+};
+
+typedef RapidfireButtonParm RapidfireButtonParms[RAPIDFIRE_MAX_BUTTONS];
+static RapidfireButtonParms RapidfirePlayerParms[RAPIDFIRE_MAX_PLAYERS];
+
+     
+     
+
+int rapidfire_buttonix2type(int button)
+{
+  static int RapidfireButtonix2type[RAPIDFIRE_MAX_BUTTONS]={
+							  IPT_BUTTON1,
+							  IPT_BUTTON2,
+							  IPT_BUTTON3,
+							  IPT_BUTTON4,
+							  IPT_BUTTON5,
+							  IPT_BUTTON6,
+							  IPT_BUTTON7,
+							  IPT_BUTTON8,
+							  IPT_BUTTON9,
+							  IPT_BUTTON10
+  };
+  return RapidfireButtonix2type[button];
+}
+
+/*
+  find input_port_entry associated with player and button
+ */
+int rapidfire_findPortinfoentry(int player,int button,input_port_entry **iperef,int *portnumref)
+{
+  input_port_entry *ipe;
+  int btype=rapidfire_buttonix2type(button);
+  for(int p=0,b;p<MAX_INPUT_PORTS;p++){
+    for(b=0;b<MAX_BITS_PER_PORT;b++){
+      ipe=port_info[p].bit[b].port;
+      if (ipe){
+	if (ipe->player==player && ipe->type==btype){
+	  *iperef=ipe;
+	  *portnumref=p;
+	  return 1;
+	}
+      }
+    }
+  }
+  *iperef=NULL;
+  *portnumref=-1;
+  return 0;
+}
+
+
+/*
+  add virtual button
+*/
+input_port_entry *rapidfire_addVirtualButton(int player,int button)
+{
+  int portnum=RapidfirePlayerParms[player][button].portnum;
+  if (portnum<0)  return NULL;
+
+  if (RapidfirePlayerParms[player][button].buttontype!=RAPIDFIRE_TYPE_NONE)  return NULL;
+
+  for(int b=0;b<MAX_BITS_PER_PORT;b++){
+    if (!port_info[portnum].bit[b].port){
+      input_port_entry *ipe=malloc(sizeof(input_port_entry));
+      int btype=rapidfire_buttonix2type(button);
+
+      memset(ipe,0,sizeof(input_port_entry));
+      port_info[portnum].bit[b].port=ipe;
+
+      ipe->type=btype;
+      ipe->player=player;
+
+      RapidfirePlayerParms[player][button].inputportentry=ipe;
+      RapidfirePlayerParms[player][button].portnum=portnum;
+      RapidfirePlayerParms[player][button].buttontype=RAPIDFIRE_TYPE_VIRTUAL;
+
+      seq_copy(&ipe->seq,&default_ports[default_ports_lookup[btype][player]].defaultseq);
+      
+      return ipe;
+    }
+  }
+
+  return NULL;
+}
+  
+/*
+  enable redirecting button to another button
+*/
+int rapidfire_setRedirectButton(int player,int button,int redirect)
+{
+  if (button==redirect) return 0;
+  if (player<0 || player>=RAPIDFIRE_MAX_PLAYERS || button<0 || button>=RAPIDFIRE_MAX_BUTTONS)  return 0;
+  if (redirect>=0 && RapidfirePlayerParms[player][redirect].buttontype!=RAPIDFIRE_TYPE_REAL)  return 0;
+
+  input_port_entry *ipe=RapidfirePlayerParms[player][button].inputportentry;
+  if (!ipe){
+    /* inputportentry==NULL -> buttontype=NONE */
+    ipe=rapidfire_addVirtualButton(player,button);
+    if (!ipe)  return 0;
+  }
+
+  if (redirect>=0){
+    ipe->mask=RapidfirePlayerParms[player][redirect].originalmask;
+    RapidfirePlayerParms[player][button].redirectbutton=redirect;
+  }
+  else{
+    ipe->mask=RapidfirePlayerParms[player][button].originalmask;
+    RapidfirePlayerParms[player][button].redirectbutton=-1;
+  }
+
+  return 1;
+}
+    
+  
+
+
+/*
+  initialize rapid fire
+ */
+void rapidfire_init(void)
+{
+  input_port_entry *ipe;
+  int portnum,sameplayerportnum;
+  for(int p=0,b;p<RAPIDFIRE_MAX_PLAYERS;p++){
+    sameplayerportnum=-1;
+    for(b=0;b<RAPIDFIRE_MAX_BUTTONS;b++){
+      RapidfirePlayerParms[p][b].interval=0;
+      RapidfirePlayerParms[p][b].intervalcounter=0;
+      RapidfirePlayerParms[p][b].redirectbutton=-1;
+
+      if (rapidfire_findPortinfoentry(p,b,&ipe,&portnum)){
+	RapidfirePlayerParms[p][b].originalmask=ipe->mask;
+	RapidfirePlayerParms[p][b].inputportentry=ipe;
+	RapidfirePlayerParms[p][b].buttontype=RAPIDFIRE_TYPE_REAL;
+	RapidfirePlayerParms[p][b].portnum=portnum;
+	sameplayerportnum=portnum;
+      }
+      else{
+	RapidfirePlayerParms[p][b].originalmask=0;
+	RapidfirePlayerParms[p][b].inputportentry=NULL;
+	RapidfirePlayerParms[p][b].buttontype=RAPIDFIRE_TYPE_NONE;
+	RapidfirePlayerParms[p][b].portnum=sameplayerportnum;
+      }
+    }
+  }
+}
+
+/*
+  input port type(IPT_BUTTONx) -> button index(0-9)
+*/
+int rapidfire_IPT2Buttonix(int ipt)
+{
+  switch(ipt){
+  case IPT_BUTTON1 : return  0;
+  case IPT_BUTTON2 : return  1;
+  case IPT_BUTTON3 : return  2;
+  case IPT_BUTTON4 : return  3;
+  case IPT_BUTTON5 : return  4;
+  case IPT_BUTTON6 : return  5;
+  case IPT_BUTTON7 : return  6;
+  case IPT_BUTTON8 : return  7;
+  case IPT_BUTTON9 : return  8;
+  case IPT_BUTTON10: return  9;
+  }
+  return -1;
+}
+  
+
+/*
+  
+ */
+int rapidfire_buttonPressed(int pressed,input_port_entry *port)
+{
+  int button=rapidfire_IPT2Buttonix(port->type);
+  if (button<0) return pressed;
+
+  RapidfireButtonParm *bparm=&RapidfirePlayerParms[port->player][button];
+  if (bparm->interval==0) return pressed;
+  
+  if (++(bparm->intervalcounter)<bparm->interval) return 0;
+  bparm->intervalcounter=0;
+  return 1;
+
+  /*
+    experimental
+    enable rapid fire for x multiply
+  */
+  ++(bparm->intervalcounter);
+  if (bparm->intervalcounter<=bparm->interval/2)  return 1;
+  if (bparm->intervalcounter>=bparm->interval)  bparm->intervalcounter=0;
+  return 0;
+}
+
+
+/*
+  menu interface
+ */
+
+/*
+  get rapid interval
+*/
+int rapidfire_getInterval(int player,int button)
+{
+  if (player<0 || player>=RAPIDFIRE_MAX_PLAYERS || button<0 || button>=RAPIDFIRE_MAX_BUTTONS)  return 0;
+  return RapidfirePlayerParms[player][button].interval;
+}
+
+/*
+  set rapid interval
+*/
+void rapidfire_setInterval(int player,int button,int interval)
+{
+  if (player<0 || player>=RAPIDFIRE_MAX_PLAYERS || button<0 || button>=RAPIDFIRE_MAX_BUTTONS)  return;
+  RapidfirePlayerParms[player][button].interval=interval;
+}
+  
+/*
+  get redirect button
+*/
+int rapidfire_getRedirect(int player,int button)
+{
+  if (player<0 || player>=RAPIDFIRE_MAX_PLAYERS || button<0 || button>=RAPIDFIRE_MAX_BUTTONS)  return -1;
+  return RapidfirePlayerParms[player][button].redirectbutton;
+}
+
+/*
+  set redirect button
+*/
+void rapidfire_setRedirect(int player,int button,int redirect)
+{
+  rapidfire_setRedirectButton(player,button,redirect);
+}
+
+#endif /* ENABLE_RAPIDFIRE */
